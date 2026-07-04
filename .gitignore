@@ -11,3 +11,7 @@ build/
 
 # macOS
 .DS_Store
+
+# Local Claude Code config / notes
+.claude/
+PROJECT_CONTEXT.md
