@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rtsp-ndi"
-version = "0.2.0"
-description = "Bridge an RTSP stream to an NDI source"
+version = "0.3.0"
+description = "Bridge RTSP streams to NDI sources, with a desktop GUI, network scanning, and a background service"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Matthew Meekins", email = "matthewmeekins@gmail.com" }]
@@ -29,6 +29,7 @@ Repository = "https://github.com/matthewmeekins/rtsp-ndi"
 [project.scripts]
 rtsp-to-ndi = "rtsp_ndi.bridge:main"
 rtsp-ndi    = "rtsp_ndi.service:main"
+rtsp-ndi-gui = "rtsp_ndi.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

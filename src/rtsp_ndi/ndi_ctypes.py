@@ -8,6 +8,7 @@ which bundles it for macOS, Windows, and Linux — no manual SDK download needed
 import ctypes
 import os
 import sys
+import threading
 from ctypes import (
     POINTER, Structure,
     c_bool, c_char_p, c_float, c_int, c_int64, c_uint32, c_void_p,
@@ -26,13 +27,27 @@ def _find_dylib() -> str:
     # 2. Bundled inside the ndi-python wheel (preferred — no SDK install needed)
     # Use find_spec to locate the package directory without importing the
     # C extension, which crashes on macOS due to a GIL issue in ndi-python.
+    # The bundled runtime's filename is platform-specific (libndi.dylib on
+    # macOS, libndi.so on Linux, a .dll on Windows).
     try:
         import importlib.util
         spec = importlib.util.find_spec("NDIlib")
         if spec and spec.origin:
-            bundled = Path(spec.origin).parent / "libndi.dylib"
-            if bundled.exists():
-                return str(bundled)
+            pkg_dir = Path(spec.origin).parent
+            if sys.platform == "darwin":
+                bundled_names = ["libndi.dylib"]
+            elif sys.platform == "win32":
+                bundled_names = ["Processing.NDI.Lib.x64.dll", "ndi.dll"]
+            else:
+                bundled_names = ["libndi.so"]
+            for name in bundled_names:
+                bundled = pkg_dir / name
+                if bundled.exists():
+                    return str(bundled)
+            # Fall back to any versioned shared object (e.g. libndi.so.6).
+            for pattern in ("libndi.so*", "libndi*.dylib", "*ndi*.dll"):
+                for match in pkg_dir.glob(pattern):
+                    return str(match)
     except Exception:
         pass
 
@@ -119,12 +134,33 @@ _lib.NDIlib_send_send_video_v2.argtypes = [c_void_p, POINTER(VideoFrameV2)]
 
 
 # ── public API ────────────────────────────────────────────────────────────────
+#
+# initialize()/destroy() are reference-counted: the underlying NDIlib runtime
+# is only actually brought up on the first call and torn down once every
+# caller has released it. This makes it safe to call from multiple concurrent
+# camera bridge threads (as the GUI and service manager do) without one
+# bridge's shutdown tearing down NDI out from under another still-running one.
+
+_init_lock = threading.Lock()
+_init_count = 0
 
 def initialize() -> bool:
-    return bool(_lib.NDIlib_initialize())
+    global _init_count
+    with _init_lock:
+        if _init_count == 0:
+            if not _lib.NDIlib_initialize():
+                return False
+        _init_count += 1
+        return True
 
 def destroy() -> None:
-    _lib.NDIlib_destroy()
+    global _init_count
+    with _init_lock:
+        if _init_count <= 0:
+            return
+        _init_count -= 1
+        if _init_count == 0:
+            _lib.NDIlib_destroy()
 
 def send_create(name: str, clock_video: bool = False) -> c_void_p:
     cfg = _SendCreate(

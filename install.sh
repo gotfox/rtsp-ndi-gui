@@ -48,7 +48,16 @@ else
     info "FFmpeg already installed."
 fi
 
-# ── find a working Python 3.12 ────────────────────────────────────────────────
+# ── check for Tcl/Tk (needed by the GUI's tkinter module) ────────────────────
+if ! brew list tcl-tk &>/dev/null; then
+    info "Installing Tcl/Tk (required for the GUI)..."
+    brew install tcl-tk
+else
+    info "Tcl/Tk already installed."
+fi
+TCLTK_PREFIX="$(brew --prefix tcl-tk 2>/dev/null || true)"
+
+# ── find a working Python 3.12 (with tkinter for the GUI) ────────────────────
 find_working_python() {
     for py in \
         "$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12" \
@@ -73,16 +82,29 @@ if [[ -z "$PYTHON" ]]; then
     fi
 
     if [[ ! -d "$HOME/.pyenv/versions/$PYTHON_VERSION" ]]; then
-        info "Installing Python $PYTHON_VERSION via pyenv..."
+        info "Installing Python $PYTHON_VERSION via pyenv (with tkinter support)..."
+        if [[ -n "$TCLTK_PREFIX" ]]; then
+            export PYTHON_CONFIGURE_OPTS="--with-tcltk-includes='-I$TCLTK_PREFIX/include' --with-tcltk-libs='-L$TCLTK_PREFIX/lib -ltcl8.6 -ltk8.6'"
+        fi
         pyenv install "$PYTHON_VERSION"
     else
         info "Python $PYTHON_VERSION already installed via pyenv."
     fi
 
     PYTHON="$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12"
+elif [[ "$PYTHON" == "$(brew --prefix python@3.12 2>/dev/null)/bin/python3.12" ]]; then
+    # Homebrew's Python ships tkinter as a separate formula.
+    if ! "$PYTHON" -c "import tkinter" &>/dev/null; then
+        info "Installing python-tk (tkinter support for Homebrew Python)..."
+        brew install python-tk@3.12 || true
+    fi
 fi
 
 info "Using Python: $PYTHON ($($PYTHON --version))"
+
+if ! "$PYTHON" -c "import tkinter" &>/dev/null; then
+    warn "tkinter isn't available for this Python — the GUI (rtsp-ndi-gui) won't run, but the CLI/service will work fine."
+fi
 
 # ── install pipx via the working Python ──────────────────────────────────────
 PIPX="$($PYTHON -c 'import sys; print(sys.prefix)')/bin/pipx"
@@ -117,6 +139,45 @@ if [[ -n "$SHELL_RC" ]] && ! grep -q "$LOCAL_BIN" "$SHELL_RC" 2>/dev/null; then
 fi
 
 export PATH="$LOCAL_BIN:$PATH"
+
+# ── create a double-clickable macOS app for the GUI ───────────────────────────
+APP_DIR="$HOME/Applications/RTSP-NDI.app"
+GUI_EXECUTABLE="$LOCAL_BIN/rtsp-ndi-gui"
+
+if [[ -x "$GUI_EXECUTABLE" ]]; then
+    info "Creating RTSP-NDI.app in ~/Applications..."
+    mkdir -p "$APP_DIR/Contents/MacOS"
+    cat > "$APP_DIR/Contents/MacOS/RTSP-NDI" <<APP_EOF
+#!/usr/bin/env bash
+export PATH="$LOCAL_BIN:\$PATH"
+exec "$GUI_EXECUTABLE"
+APP_EOF
+    chmod +x "$APP_DIR/Contents/MacOS/RTSP-NDI"
+    cat > "$APP_DIR/Contents/Info.plist" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>RTSP-NDI</string>
+    <key>CFBundleExecutable</key>
+    <string>RTSP-NDI</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rtsp-ndi.gui</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST_EOF
+    info "RTSP-NDI.app created — find it in ~/Applications or Spotlight."
+fi
 
 # ── register launchd service ──────────────────────────────────────────────────
 PLIST="$HOME/Library/LaunchAgents/com.rtsp-ndi.plist"
@@ -157,7 +218,11 @@ fi
 echo ""
 echo -e "${GREEN}✓ Installation complete!${NC}"
 echo ""
-echo "Add cameras, then start the service:"
+echo "Open the GUI to scan your network for cameras, add feeds, and manage them:"
+echo "  open '$APP_DIR'      (or launch RTSP-NDI from Spotlight/Applications)"
+echo "  rtsp-ndi-gui           (same thing, from the terminal)"
+echo ""
+echo "Or use the CLI:"
 echo "  rtsp-ndi add --url 'rtsp://user:password@camera-ip/stream' --name 'Camera 1'"
 echo "  rtsp-ndi start"
 echo ""
