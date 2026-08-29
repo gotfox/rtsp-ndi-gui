@@ -83,6 +83,7 @@ find_working_python() {
 }
 
 PYTHON=$(find_working_python || true)
+PYENV_PYTHON="$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12"
 
 if [[ -z "$PYTHON" ]]; then
     warn "Homebrew Python 3.12 is incompatible with this macOS version. Installing via pyenv..."
@@ -102,7 +103,25 @@ if [[ -z "$PYTHON" ]]; then
         info "Python $PYTHON_VERSION already installed via pyenv."
     fi
 
-    PYTHON="$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12"
+    PYTHON="$PYENV_PYTHON"
+elif [[ "$PYTHON" == "$PYENV_PYTHON" ]] && ! "$PYTHON" -c "import tkinter" &>/dev/null; then
+    # A pyenv build already exists (e.g. from before Tcl/Tk was installed, or
+    # an older run of this script) but wasn't compiled with tkinter support.
+    # Rebuild it rather than silently keeping a GUI-less Python around.
+    warn "Existing pyenv Python $PYTHON_VERSION lacks tkinter support. Rebuilding with Tcl/Tk..."
+
+    if ! command -v pyenv &>/dev/null; then
+        info "Installing pyenv..."
+        brew install pyenv
+    fi
+
+    if [[ -n "$TCLTK_PREFIX" ]]; then
+        export PYTHON_CONFIGURE_OPTS="--with-tcltk-includes='-I$TCLTK_PREFIX/include' --with-tcltk-libs='-L$TCLTK_PREFIX/lib -ltcl8.6 -ltk8.6'"
+    fi
+    pyenv uninstall -f "$PYTHON_VERSION"
+    pyenv install "$PYTHON_VERSION"
+
+    PYTHON="$PYENV_PYTHON"
 elif [[ "$PYTHON" == "$(brew --prefix python@3.12 2>/dev/null)/bin/python3.12" ]]; then
     # Homebrew's Python ships tkinter as a separate formula.
     if ! "$PYTHON" -c "import tkinter" &>/dev/null; then
