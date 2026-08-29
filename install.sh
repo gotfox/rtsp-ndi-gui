@@ -166,16 +166,61 @@ if [[ ! -x "$GUI_EXECUTABLE" ]]; then
     warn "  pipx install --force '$SOURCE'"
 fi
 
+# ── build a .icns app icon from the icon bundled inside the package ──────────
+build_icns() {
+    local src="$1" out_icns="$2" iconset_parent iconset sz sz2
+    command -v sips &>/dev/null && command -v iconutil &>/dev/null || return 1
+    iconset_parent="$(mktemp -d)"
+    iconset="$iconset_parent/AppIcon.iconset"
+    mkdir -p "$iconset"
+    for sz in 16 32 128 256 512; do
+        sz2=$((sz * 2))
+        sips -z "$sz" "$sz" "$src" --out "$iconset/icon_${sz}x${sz}.png" &>/dev/null || { rm -rf "$iconset_parent"; return 1; }
+        sips -z "$sz2" "$sz2" "$src" --out "$iconset/icon_${sz}x${sz}@2x.png" &>/dev/null || { rm -rf "$iconset_parent"; return 1; }
+    done
+    iconutil -c icns "$iconset" -o "$out_icns" &>/dev/null
+    local ok=$?
+    rm -rf "$iconset_parent"
+    return $ok
+}
+
+# The icon ships inside the installed package (src/rtsp_ndi/assets/icon.png);
+# pipx's venv for it lives at a predictable path regardless of install source.
+PIPX_VENV_PYTHON="$HOME/.local/pipx/venvs/$PACKAGE/bin/python3"
+ICON_SOURCE=""
+if [[ -x "$PIPX_VENV_PYTHON" ]]; then
+    ICON_SOURCE="$("$PIPX_VENV_PYTHON" -c "
+import pathlib
+try:
+    import rtsp_ndi
+    p = pathlib.Path(rtsp_ndi.__file__).parent / 'assets' / 'icon.png'
+    print(p if p.exists() else '')
+except Exception:
+    print('')
+" 2>/dev/null)"
+fi
+
 # ── create a double-clickable macOS app for the GUI ───────────────────────────
 if [[ -x "$GUI_EXECUTABLE" ]]; then
     info "Creating RTSP-NDI.app in ~/Applications..."
-    mkdir -p "$APP_DIR/Contents/MacOS"
+    mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
     cat > "$APP_DIR/Contents/MacOS/RTSP-NDI" <<APP_EOF
 #!/usr/bin/env bash
 export PATH="$LOCAL_BIN:\$PATH"
 exec "$GUI_EXECUTABLE"
 APP_EOF
     chmod +x "$APP_DIR/Contents/MacOS/RTSP-NDI"
+
+    ICON_PLIST_KEY=""
+    if [[ -n "$ICON_SOURCE" ]] && build_icns "$ICON_SOURCE" "$APP_DIR/Contents/Resources/AppIcon.icns"; then
+        ICON_PLIST_KEY="    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+"
+        info "App icon generated."
+    else
+        warn "Could not generate the app icon (sips/iconutil unavailable, or the icon asset is missing) — RTSP-NDI.app will use the default icon."
+    fi
+
     cat > "$APP_DIR/Contents/Info.plist" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -192,13 +237,14 @@ APP_EOF
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>LSUIElement</key>
+${ICON_PLIST_KEY}    <key>LSUIElement</key>
     <false/>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
 </plist>
 PLIST_EOF
+    touch "$APP_DIR"
     info "RTSP-NDI.app created — find it in ~/Applications or Spotlight."
 fi
 
