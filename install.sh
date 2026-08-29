@@ -8,11 +8,16 @@ set -e
 PYTHON_VERSION="3.12.10"
 PACKAGE="rtsp-ndi"
 
-# Normally installs the latest release from PyPI. To test an unreleased
-# branch/commit instead, set RTSP_NDI_SOURCE to a pip-installable source, e.g.:
+# The "rtsp-ndi" name on PyPI is a separate, manually-published artifact
+# this fork doesn't control, so by default we install straight from this
+# repo's main branch — that's the only way "run install.sh" reliably gets
+# what's actually in this repo. Override RTSP_NDI_SOURCE to point at a
+# different branch/commit, a local checkout, or PyPI explicitly, e.g.:
 #   RTSP_NDI_SOURCE="git+https://github.com/gotfox/rtsp-ndi@my-branch" bash install.sh
 #   RTSP_NDI_SOURCE="/path/to/local/checkout" bash install.sh
-SOURCE="${RTSP_NDI_SOURCE:-$PACKAGE}"
+#   RTSP_NDI_SOURCE="rtsp-ndi" bash install.sh   # explicitly use PyPI
+DEFAULT_SOURCE="git+https://github.com/gotfox/rtsp-ndi@main"
+SOURCE="${RTSP_NDI_SOURCE:-$DEFAULT_SOURCE}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -121,15 +126,14 @@ if [[ ! -x "$PIPX" ]]; then
 fi
 
 # ── install or upgrade rtsp-ndi ───────────────────────────────────────────────
-if [[ "$SOURCE" != "$PACKAGE" ]]; then
-    info "Installing $PACKAGE from $SOURCE (RTSP_NDI_SOURCE override)..."
+# --force reinstalls even if pipx thinks it's already installed, which for a
+# git source also means re-fetching the branch's latest commit each run.
+if "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
+    info "Reinstalling $PACKAGE from $SOURCE..."
     "$PYTHON" -m pipx install --force "$SOURCE"
-elif "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
-    info "Upgrading $PACKAGE..."
-    "$PIPX" upgrade "$PACKAGE"
 else
-    info "Installing $PACKAGE..."
-    "$PYTHON" -m pipx install "$PACKAGE"
+    info "Installing $PACKAGE from $SOURCE..."
+    "$PYTHON" -m pipx install "$SOURCE"
 fi
 
 # ── ensure ~/.local/bin is on PATH ────────────────────────────────────────────
@@ -158,21 +162,70 @@ APP_DIR="$HOME/Applications/RTSP-NDI.app"
 GUI_EXECUTABLE="$LOCAL_BIN/rtsp-ndi-gui"
 
 if [[ ! -x "$GUI_EXECUTABLE" ]]; then
-    warn "This installed version of $PACKAGE has no rtsp-ndi-gui — it's likely older than expected (the GUI hasn't been published to PyPI yet)."
-    warn "To install an unreleased branch instead, re-run with e.g.:"
-    warn "  RTSP_NDI_SOURCE=\"git+https://github.com/gotfox/rtsp-ndi@claude/rtsp-ndi-app-gui-yj2mmh\" bash install.sh"
+    warn "Installed from $SOURCE but rtsp-ndi-gui is still missing — check the pipx output above for errors, or try:"
+    warn "  pipx install --force '$SOURCE'"
+fi
+
+# ── build a .icns app icon from the icon bundled inside the package ──────────
+build_icns() {
+    local src="$1" out_icns="$2" iconset_parent iconset sz sz2
+    command -v sips &>/dev/null && command -v iconutil &>/dev/null || return 1
+    iconset_parent="$(mktemp -d)"
+    iconset="$iconset_parent/AppIcon.iconset"
+    mkdir -p "$iconset"
+    for sz in 16 32 128 256 512; do
+        sz2=$((sz * 2))
+        sips -z "$sz" "$sz" "$src" --out "$iconset/icon_${sz}x${sz}.png" &>/dev/null || { rm -rf "$iconset_parent"; return 1; }
+        sips -z "$sz2" "$sz2" "$src" --out "$iconset/icon_${sz}x${sz}@2x.png" &>/dev/null || { rm -rf "$iconset_parent"; return 1; }
+    done
+    iconutil -c icns "$iconset" -o "$out_icns" &>/dev/null
+    local ok=$?
+    rm -rf "$iconset_parent"
+    return $ok
+}
+
+# The icon ships inside the installed package (src/rtsp_ndi/assets/icon.png).
+# Don't guess pipx's venv directory layout — it differs by platform and has
+# changed across pipx versions (e.g. ~/.local/pipx vs the newer platform data
+# dir, which on macOS is ~/Library/Application Support/pipx). Instead, read
+# the venv's python straight off the shebang of the script pipx just
+# installed — pip/setuptools always points console-script shebangs at their
+# own venv's interpreter, regardless of where that venv lives.
+PIPX_VENV_PYTHON="$(head -n1 "$LOCAL_BIN/rtsp-ndi" 2>/dev/null | sed 's/^#!//')"
+ICON_SOURCE=""
+if [[ -x "$PIPX_VENV_PYTHON" ]]; then
+    ICON_SOURCE="$("$PIPX_VENV_PYTHON" -c "
+import pathlib
+try:
+    import rtsp_ndi
+    p = pathlib.Path(rtsp_ndi.__file__).parent / 'assets' / 'icon.png'
+    print(p if p.exists() else '')
+except Exception:
+    print('')
+" 2>/dev/null)"
 fi
 
 # ── create a double-clickable macOS app for the GUI ───────────────────────────
 if [[ -x "$GUI_EXECUTABLE" ]]; then
     info "Creating RTSP-NDI.app in ~/Applications..."
-    mkdir -p "$APP_DIR/Contents/MacOS"
+    mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
     cat > "$APP_DIR/Contents/MacOS/RTSP-NDI" <<APP_EOF
 #!/usr/bin/env bash
 export PATH="$LOCAL_BIN:\$PATH"
 exec "$GUI_EXECUTABLE"
 APP_EOF
     chmod +x "$APP_DIR/Contents/MacOS/RTSP-NDI"
+
+    ICON_PLIST_KEY=""
+    if [[ -n "$ICON_SOURCE" ]] && build_icns "$ICON_SOURCE" "$APP_DIR/Contents/Resources/AppIcon.icns"; then
+        ICON_PLIST_KEY="    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+"
+        info "App icon generated."
+    else
+        warn "Could not generate the app icon (sips/iconutil unavailable, or the icon asset is missing) — RTSP-NDI.app will use the default icon."
+    fi
+
     cat > "$APP_DIR/Contents/Info.plist" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -189,13 +242,14 @@ APP_EOF
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>LSUIElement</key>
+${ICON_PLIST_KEY}    <key>LSUIElement</key>
     <false/>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
 </plist>
 PLIST_EOF
+    touch "$APP_DIR"
     info "RTSP-NDI.app created — find it in ~/Applications or Spotlight."
 fi
 

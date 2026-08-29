@@ -11,18 +11,21 @@ This was built mostly using Claude. Use at your own risk
 ### macOS (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthewmeekins/rtsp-ndi/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gotfox/rtsp-ndi/main/install.sh | bash
 ```
 
 Requires [Homebrew](https://brew.sh). The script handles FFmpeg, Tcl/Tk (for
-the GUI), Python, and the package automatically, and creates a **RTSP-NDI**
-app in `~/Applications`.
+the GUI), Python, and the package automatically (installing straight from
+this repo's `main` branch), and creates a **RTSP-NDI** app in `~/Applications`.
 
 ### Other platforms
 
 ```bash
-pip install rtsp-ndi
+pip install "git+https://github.com/gotfox/rtsp-ndi@main"
 ```
+
+(the `rtsp-ndi` name on PyPI is an older, separately-maintained release
+without the GUI — installing from this repo gets you the current code)
 
 Also requires:
 - **FFmpeg** on your `PATH` — Windows: https://ffmpeg.org/download.html, Linux: `sudo apt install ffmpeg`
