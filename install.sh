@@ -8,11 +8,16 @@ set -e
 PYTHON_VERSION="3.12.10"
 PACKAGE="rtsp-ndi"
 
-# Normally installs the latest release from PyPI. To test an unreleased
-# branch/commit instead, set RTSP_NDI_SOURCE to a pip-installable source, e.g.:
+# The "rtsp-ndi" name on PyPI is a separate, manually-published artifact
+# this fork doesn't control, so by default we install straight from this
+# repo's main branch — that's the only way "run install.sh" reliably gets
+# what's actually in this repo. Override RTSP_NDI_SOURCE to point at a
+# different branch/commit, a local checkout, or PyPI explicitly, e.g.:
 #   RTSP_NDI_SOURCE="git+https://github.com/gotfox/rtsp-ndi@my-branch" bash install.sh
 #   RTSP_NDI_SOURCE="/path/to/local/checkout" bash install.sh
-SOURCE="${RTSP_NDI_SOURCE:-$PACKAGE}"
+#   RTSP_NDI_SOURCE="rtsp-ndi" bash install.sh   # explicitly use PyPI
+DEFAULT_SOURCE="git+https://github.com/gotfox/rtsp-ndi@main"
+SOURCE="${RTSP_NDI_SOURCE:-$DEFAULT_SOURCE}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -121,15 +126,14 @@ if [[ ! -x "$PIPX" ]]; then
 fi
 
 # ── install or upgrade rtsp-ndi ───────────────────────────────────────────────
-if [[ "$SOURCE" != "$PACKAGE" ]]; then
-    info "Installing $PACKAGE from $SOURCE (RTSP_NDI_SOURCE override)..."
+# --force reinstalls even if pipx thinks it's already installed, which for a
+# git source also means re-fetching the branch's latest commit each run.
+if "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
+    info "Reinstalling $PACKAGE from $SOURCE..."
     "$PYTHON" -m pipx install --force "$SOURCE"
-elif "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
-    info "Upgrading $PACKAGE..."
-    "$PIPX" upgrade "$PACKAGE"
 else
-    info "Installing $PACKAGE..."
-    "$PYTHON" -m pipx install "$PACKAGE"
+    info "Installing $PACKAGE from $SOURCE..."
+    "$PYTHON" -m pipx install "$SOURCE"
 fi
 
 # ── ensure ~/.local/bin is on PATH ────────────────────────────────────────────
@@ -158,9 +162,8 @@ APP_DIR="$HOME/Applications/RTSP-NDI.app"
 GUI_EXECUTABLE="$LOCAL_BIN/rtsp-ndi-gui"
 
 if [[ ! -x "$GUI_EXECUTABLE" ]]; then
-    warn "This installed version of $PACKAGE has no rtsp-ndi-gui — it's likely older than expected (the GUI hasn't been published to PyPI yet)."
-    warn "To install an unreleased branch instead, re-run with e.g.:"
-    warn "  RTSP_NDI_SOURCE=\"git+https://github.com/gotfox/rtsp-ndi@claude/rtsp-ndi-app-gui-yj2mmh\" bash install.sh"
+    warn "Installed from $SOURCE but rtsp-ndi-gui is still missing — check the pipx output above for errors, or try:"
+    warn "  pipx install --force '$SOURCE'"
 fi
 
 # ── create a double-clickable macOS app for the GUI ───────────────────────────
