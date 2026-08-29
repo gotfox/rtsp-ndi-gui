@@ -11,6 +11,7 @@ import argparse
 import ctypes
 import signal
 import sys
+import threading
 import time
 
 import av
@@ -19,10 +20,39 @@ import numpy as np
 from rtsp_ndi import ndi_ctypes as ndi
 
 
-def run(rtsp_url: str, ndi_name: str, latency: str = "low") -> None:
+class BridgeError(RuntimeError):
+    """Raised when the RTSP-to-NDI bridge cannot start or fails fatally."""
+
+
+def run(
+    rtsp_url: str,
+    ndi_name: str,
+    latency: str = "low",
+    stop_event: threading.Event | None = None,
+    status_callback=None,
+) -> None:
+    """Bridge a single RTSP stream to an NDI source until stopped.
+
+    Raises BridgeError on unrecoverable startup failures. Safe to call from
+    a background thread when an external `stop_event` is supplied — signal
+    handlers are only installed when running on the main thread with no
+    caller-supplied stop_event (i.e. the CLI use case).
+    """
+
+    def emit(status: str, detail: str = "") -> None:
+        if status_callback:
+            try:
+                status_callback(status, detail)
+            except Exception:
+                pass
+
+    owns_stop_event = stop_event is None
+    if stop_event is None:
+        stop_event = threading.Event()
+
     if not ndi.initialize():
-        print("ERROR: Could not initialize NDI.")
-        sys.exit(1)
+        emit("error", "Could not initialize NDI")
+        raise BridgeError("Could not initialize NDI")
 
     sender = ndi.send_create(ndi_name, clock_video=False)
     print(f"NDI source '{ndi_name}' created.")
@@ -38,13 +68,15 @@ def run(rtsp_url: str, ndi_name: str, latency: str = "low") -> None:
         options["probesize"] = "32"
 
     print(f"Opening RTSP stream: {rtsp_url}")
+    emit("connecting", f"Opening {rtsp_url}")
     try:
         container = av.open(rtsp_url, options=options, timeout=10.0)
     except Exception as e:
         print(f"ERROR: Could not open RTSP stream: {e}")
         ndi.send_destroy(sender)
         ndi.destroy()
-        sys.exit(1)
+        emit("error", f"Could not open RTSP stream: {e}")
+        raise BridgeError(f"Could not open RTSP stream: {e}") from e
 
     video_stream = next((s for s in container.streams if s.type == "video"), None)
     if not video_stream:
@@ -52,30 +84,34 @@ def run(rtsp_url: str, ndi_name: str, latency: str = "low") -> None:
         container.close()
         ndi.send_destroy(sender)
         ndi.destroy()
-        sys.exit(1)
+        emit("error", "No video stream found")
+        raise BridgeError("No video stream found")
 
     frame_rate = float(video_stream.average_rate or 30)
     print(f"Stream: {video_stream.width}x{video_stream.height} @ {frame_rate:.2f} fps")
+    emit("connected", f"{video_stream.width}x{video_stream.height} @ {frame_rate:.2f} fps")
 
-    running = True
+    # Only take over signal handling when we own the stop_event (plain CLI
+    # invocation) and we're on the main thread — signal.signal() raises when
+    # called from a worker thread, which is how the GUI/service manager runs
+    # multiple bridges concurrently.
+    if owns_stop_event and threading.current_thread() is threading.main_thread():
+        def shutdown(sig, frame):
+            print("\nShutting down...")
+            stop_event.set()
 
-    def shutdown(sig, frame):
-        nonlocal running
-        print("\nShutting down...")
-        running = False
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
 
     frame_count = 0
     start_time = time.monotonic()
 
     try:
         for packet in container.demux(video_stream):
-            if not running:
+            if stop_event.is_set():
                 break
             for av_frame in packet.decode():
-                if not running:
+                if stop_event.is_set():
                     break
 
                 # Convert to RGBA — universally supported by PyAV regardless of source format
@@ -100,15 +136,19 @@ def run(rtsp_url: str, ndi_name: str, latency: str = "low") -> None:
 
                 if frame_count % 300 == 0:
                     elapsed = time.monotonic() - start_time
-                    print(f"  {frame_count} frames sent ({frame_count/elapsed:.1f} fps avg)")
+                    fps_avg = frame_count / elapsed if elapsed > 0 else 0.0
+                    print(f"  {frame_count} frames sent ({fps_avg:.1f} fps avg)")
+                    emit("streaming", f"{frame_count} frames sent ({fps_avg:.1f} fps avg)")
 
     except Exception as e:
         print(f"Stream error: {e}")
+        emit("error", f"Stream error: {e}")
     finally:
         container.close()
         ndi.send_destroy(sender)
         ndi.destroy()
         print(f"Done. {frame_count} frames sent.")
+        emit("stopped", f"{frame_count} frames sent")
 
 
 def main():
@@ -117,7 +157,11 @@ def main():
     parser.add_argument("--name", default="RTSP Source", help="NDI source name")
     parser.add_argument("--latency", choices=["low", "normal"], default="low")
     args = parser.parse_args()
-    run(args.url, args.name, args.latency)
+    try:
+        run(args.url, args.name, args.latency)
+    except BridgeError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

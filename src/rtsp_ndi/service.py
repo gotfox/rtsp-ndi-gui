@@ -9,12 +9,11 @@ Commands:
     rtsp-ndi start
     rtsp-ndi stop
     rtsp-ndi status
+    rtsp-ndi gui     (launch the desktop GUI)
     rtsp-ndi run     (internal — called by launchd)
 """
 
 import argparse
-import json
-import os
 import signal
 import subprocess
 import sys
@@ -22,10 +21,10 @@ import threading
 import time
 from pathlib import Path
 
+from rtsp_ndi.config import CONFIG_DIR, CONFIG_FILE, load_cameras, new_id, save_cameras as _save_cameras
+
 # ── paths ─────────────────────────────────────────────────────────────────────
 
-CONFIG_DIR  = Path.home() / ".config" / "rtsp-ndi"
-CONFIG_FILE = CONFIG_DIR / "cameras.json"
 LOG_DIR     = Path.home() / "Library" / "Logs" / "rtsp-ndi"
 PLIST_DIR   = Path.home() / "Library" / "LaunchAgents"
 PLIST_PATH  = PLIST_DIR / "com.rtsp-ndi.plist"
@@ -34,16 +33,8 @@ PLIST_LABEL = "com.rtsp-ndi"
 
 # ── config helpers ────────────────────────────────────────────────────────────
 
-def load_cameras():
-    if not CONFIG_FILE.exists():
-        return []
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
-
 def save_cameras(cameras):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cameras, f, indent=2)
+    _save_cameras(cameras)
     print(f"Config saved to {CONFIG_FILE}")
 
 
@@ -94,6 +85,7 @@ def cmd_add(args):
         print(f"Error: a camera named '{args.name}' already exists. Remove it first.")
         sys.exit(1)
     cameras.append({
+        "id":      new_id(),
         "name":    args.name,
         "url":     args.url,
         "retries": args.retries,
@@ -173,10 +165,16 @@ def cmd_status(args):
         print(f"\nLog: {log}")
 
 
+def cmd_gui(args):
+    from rtsp_ndi.gui import main as gui_main
+    gui_main()
+
+
 # ── run (called by launchd) ───────────────────────────────────────────────────
 
 def run_camera(camera, stop_event):
     """Run a single camera bridge with retry logic in its own thread."""
+    from rtsp_ndi.bridge import BridgeError
     from rtsp_ndi.bridge import run as bridge_run
 
     name    = camera["name"]
@@ -200,9 +198,13 @@ def run_camera(camera, stop_event):
         attempt += 1
         print(f"[{name}] Starting bridge (attempt {attempt})...", flush=True)
         try:
-            bridge_run(url, name, latency)
-        except Exception as e:
+            # Pass our stop_event through so bridge.run() doesn't try to
+            # install signal handlers from this worker thread.
+            bridge_run(url, name, latency, stop_event=stop_event)
+        except BridgeError as e:
             print(f"[{name}] Error: {e}", flush=True)
+        except Exception as e:
+            print(f"[{name}] Unexpected error: {e}", flush=True)
 
     print(f"[{name}] Stopped.", flush=True)
 
@@ -264,6 +266,9 @@ def main():
     sub.add_parser("restart", help="Restart the service")
     sub.add_parser("status",  help="Show service status")
 
+    # gui
+    sub.add_parser("gui", help="Launch the desktop GUI")
+
     # run (internal, called by launchd)
     sub.add_parser("run", help=argparse.SUPPRESS)
 
@@ -276,6 +281,7 @@ def main():
         "stop":    cmd_stop,
         "restart": cmd_restart,
         "status":  cmd_status,
+        "gui":     cmd_gui,
         "run":     cmd_run,
     }[args.command](args)
 
