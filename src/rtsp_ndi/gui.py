@@ -10,13 +10,15 @@ CLI/launchd service uses, so feeds added here also show up in `rtsp-ndi list`.
 
 import ipaddress
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from urllib.parse import quote, urlsplit
 
 from . import scanner
-from .manager import CameraManager
+from .manager import LOG_FILE, CameraManager
 
 STATUS_LABELS = {
     "stopped":    "Stopped",
@@ -329,6 +331,7 @@ class App(tk.Tk):
         ttk.Button(toolbar, text="Scan Network…", command=self._open_scan_dialog).pack(side="left", padx=6)
         ttk.Button(toolbar, text="Start All", command=self._start_all).pack(side="left", padx=(20, 6))
         ttk.Button(toolbar, text="Stop All", command=self._stop_all).pack(side="left")
+        ttk.Button(toolbar, text="View Log…", command=self._open_log).pack(side="right")
 
         cols = ("name", "status", "detail", "url", "latency", "retries")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
@@ -351,6 +354,7 @@ class App(tk.Tk):
         ttk.Button(actions, text="Start", command=self._start_selected).pack(side="left")
         ttk.Button(actions, text="Stop", command=self._stop_selected).pack(side="left", padx=6)
         ttk.Button(actions, text="Restart", command=self._restart_selected).pack(side="left")
+        ttk.Button(actions, text="Details…", command=self._show_details).pack(side="left", padx=6)
         ttk.Button(actions, text="Rename…", command=self._rename_selected).pack(side="left", padx=6)
         ttk.Button(actions, text="Edit…", command=self._open_edit_dialog).pack(side="left")
         ttk.Button(actions, text="Remove", command=self._remove_selected).pack(side="left", padx=6)
@@ -468,6 +472,36 @@ class App(tk.Tk):
         cam_id = self._require_selection()
         if cam_id:
             self.manager.restart(cam_id)
+
+    def _show_details(self):
+        cam_id = self._require_selection()
+        if not cam_id:
+            return
+        cam = self.manager.get(cam_id)
+        status, detail = self.manager.status(cam_id)
+        text = (
+            f"Feed:   {cam['name']}\n"
+            f"URL:    {cam['url']}\n"
+            f"Status: {STATUS_LABELS.get(status, status)}\n\n"
+            f"{detail or '(no further detail)'}"
+        )
+        messagebox.showinfo(f"Details — {cam['name']}", text, parent=self)
+
+    def _open_log(self):
+        if not LOG_FILE.exists():
+            messagebox.showinfo(
+                "No log yet", f"No log has been written yet. It will appear at:\n{LOG_FILE}", parent=self
+            )
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", str(LOG_FILE)], check=False)
+            elif sys.platform == "win32":
+                subprocess.run(["start", "", str(LOG_FILE)], shell=True, check=False)
+            else:
+                subprocess.run(["xdg-open", str(LOG_FILE)], check=False)
+        except OSError:
+            messagebox.showinfo("Log location", f"Open this file to view the log:\n{LOG_FILE}", parent=self)
 
     def _rename_selected(self):
         cam_id = self._require_selection()

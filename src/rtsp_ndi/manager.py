@@ -7,8 +7,10 @@ bridge in its own daemon thread with automatic reconnect/retry. This is the
 shared engine behind both the GUI and the `rtsp-ndi run` CLI/launchd service.
 """
 
+import logging
 import threading
 import time
+from pathlib import Path
 
 from . import bridge
 from . import config as cfgmod
@@ -16,6 +18,30 @@ from . import config as cfgmod
 # Statuses a worker can report. "running" states (used to decide whether a
 # rename/edit needs to restart the bridge) are anything past "starting".
 RUNNING_STATUSES = {"starting", "connecting", "connected", "streaming", "retrying"}
+
+# The GUI has no terminal to print to (launched as a double-clicked .app, its
+# stdout goes nowhere), so every status change is also logged here — the same
+# file the CLI/launchd service writes its own stdout to, giving one place to
+# look regardless of how rtsp-ndi is being run.
+LOG_DIR = Path.home() / "Library" / "Logs" / "rtsp-ndi"
+LOG_FILE = LOG_DIR / "rtsp-ndi.log"
+
+
+def _make_logger() -> logging.Logger:
+    logger = logging.getLogger("rtsp_ndi")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            handler = logging.FileHandler(LOG_FILE)
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(handler)
+        except OSError:
+            pass  # Can't write logs — status still reaches the GUI/CLI directly.
+    return logger
+
+
+_logger = _make_logger()
 
 
 class CameraWorker:
@@ -36,6 +62,9 @@ class CameraWorker:
         with self._lock:
             self.status = status
             self.detail = detail
+        level = logging.ERROR if status == "error" else logging.INFO
+        name = self.camera.get("name", "?")
+        _logger.log(level, "[%s] %s%s", name, status, f": {detail}" if detail else "")
         if self.on_status:
             try:
                 self.on_status(self.camera["id"], status, detail)
@@ -103,6 +132,9 @@ class CameraWorker:
             except bridge.BridgeError as e:
                 self._set_status("error", str(e))
             except Exception as e:
+                # Not a recognized BridgeError — log the full traceback since
+                # the one-line status detail won't be enough to debug this.
+                _logger.exception("[%s] Unexpected error in bridge", camera.get("name", "?"))
                 self._set_status("error", f"Unexpected error: {e}")
 
         self._set_status("stopped")
