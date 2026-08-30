@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from urllib.parse import quote, urlsplit
 
-from . import scanner
+from . import __version__, scanner
 from .manager import LOG_FILE, CameraManager
 
 STATUS_LABELS = {
@@ -310,7 +310,7 @@ class ScanDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("RTSP → NDI")
+        self.title(f"RTSP → NDI  (v{__version__})")
         self.geometry("900x430")
         self.minsize(700, 320)
 
@@ -399,7 +399,7 @@ class App(tk.Tk):
     def _update_status_bar(self):
         total = len(self.manager.list())
         running = sum(1 for w in self.manager.workers.values() if w.is_running)
-        self.status_bar.config(text=f"{total} feed(s) configured — {running} running")
+        self.status_bar.config(text=f"{total} feed(s) configured — {running} running   ·   rtsp-ndi v{__version__}")
 
     def _refresh_list(self):
         selected = self.tree.selection()

@@ -21,6 +21,7 @@ import threading
 import time
 from pathlib import Path
 
+from rtsp_ndi import __version__
 from rtsp_ndi.config import CONFIG_DIR, CONFIG_FILE, load_cameras, new_id, save_cameras as _save_cameras
 
 # ── paths ─────────────────────────────────────────────────────────────────────
@@ -149,6 +150,7 @@ def cmd_restart(args):
 
 
 def cmd_status(args):
+    print(f"rtsp-ndi {__version__}")
     code, out, _ = launchctl("list", PLIST_LABEL)
     if code != 0:
         print("rtsp-ndi service is not running.")
@@ -243,6 +245,7 @@ def main():
         prog="rtsp-ndi",
         description="Manage RTSP to NDI bridges."
     )
+    parser.add_argument("--version", action="version", version=f"rtsp-ndi {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # add

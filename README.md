@@ -99,7 +99,12 @@ rtsp-ndi stop
 rtsp-ndi restart
 rtsp-ndi status
 rtsp-ndi gui         # launch the desktop GUI
+rtsp-ndi --version
 ```
+
+The version is also shown in the GUI's title bar and status bar, and in
+`rtsp-ndi status` — handy for confirming a reinstall from `main` actually
+picked up new code, since it isn't published to PyPI as separate releases.
 
 ### One-off bridge (no service, no config file)
 
