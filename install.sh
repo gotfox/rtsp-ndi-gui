@@ -208,13 +208,14 @@ build_icns() {
 }
 
 # The icon ships inside the installed package (src/rtsp_ndi/assets/icon.png).
-# Don't guess pipx's venv directory layout — it differs by platform and has
-# changed across pipx versions (e.g. ~/.local/pipx vs the newer platform data
-# dir, which on macOS is ~/Library/Application Support/pipx). Instead, read
-# the venv's python straight off the shebang of the script pipx just
-# installed — pip/setuptools always points console-script shebangs at their
-# own venv's interpreter, regardless of where that venv lives.
-PIPX_VENV_PYTHON="$(head -n1 "$LOCAL_BIN/rtsp-ndi" 2>/dev/null | sed 's/^#!//')"
+# Don't guess pipx's venv directory layout, and don't read it off the
+# shebang of the script pipx just installed either: on macOS that venv
+# lives under "~/Library/Application Support/pipx/...", and a space in
+# the interpreter path makes pip/setuptools emit a "#!/bin/sh" polyglot
+# shim instead of a plain shebang, so the first line is just "/bin/sh",
+# not the real interpreter. Ask pipx itself where it keeps its venvs.
+PIPX_VENVS_DIR="$("$PYTHON" -m pipx environment --value PIPX_LOCAL_VENVS 2>/dev/null)"
+PIPX_VENV_PYTHON="$PIPX_VENVS_DIR/$PACKAGE/bin/python3.12"
 ICON_SOURCE=""
 if [[ -x "$PIPX_VENV_PYTHON" ]]; then
     ICON_SOURCE="$("$PIPX_VENV_PYTHON" -c "
