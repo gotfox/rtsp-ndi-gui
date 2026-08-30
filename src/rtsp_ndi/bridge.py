@@ -24,6 +24,24 @@ class BridgeError(RuntimeError):
     """Raised when the RTSP-to-NDI bridge cannot start or fails fatally."""
 
 
+# FFmpeg's internal "AVERROR_EXIT" code (the four bytes of "EXIT" packed into
+# an int) — this is what PyAV raises when *our own* `timeout=` kwarg cuts off
+# a still-pending connect/read, not an error FFmpeg itself reported. Left
+# alone, it surfaces to users as the meaningless "[Errno 1414092869]
+# Immediate exit requested", so translate it into an explanation instead.
+_AVERROR_EXIT = 1414092869
+
+
+def _describe_open_error(e: Exception, timeout: float) -> str:
+    """Turn an `av.open()` failure into a message a user can act on."""
+    if getattr(e, "errno", None) == _AVERROR_EXIT:
+        return (
+            f"Timed out after {timeout:.0f}s waiting for a response — "
+            "check the camera's IP/port and that it's powered on and reachable"
+        )
+    return str(e)
+
+
 def run(
     rtsp_url: str,
     ndi_name: str,
@@ -69,14 +87,16 @@ def run(
 
     print(f"Opening RTSP stream: {rtsp_url}")
     emit("connecting", f"Opening {rtsp_url}")
+    open_timeout = 10.0
     try:
-        container = av.open(rtsp_url, options=options, timeout=10.0)
+        container = av.open(rtsp_url, options=options, timeout=open_timeout)
     except Exception as e:
-        print(f"ERROR: Could not open RTSP stream: {e}")
+        detail = _describe_open_error(e, open_timeout)
+        print(f"ERROR: Could not open RTSP stream: {detail}")
         ndi.send_destroy(sender)
         ndi.destroy()
-        emit("error", f"Could not open RTSP stream: {e}")
-        raise BridgeError(f"Could not open RTSP stream: {e}") from e
+        emit("error", f"Could not open RTSP stream: {detail}")
+        raise BridgeError(f"Could not open RTSP stream: {detail}") from e
 
     video_stream = next((s for s in container.streams if s.type == "video"), None)
     if not video_stream:

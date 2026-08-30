@@ -18,6 +18,26 @@ Requires [Homebrew](https://brew.sh). The script handles FFmpeg, Tcl/Tk (for
 the GUI), Python, and the package automatically (installing straight from
 this repo's `main` branch), and creates a **RTSP-NDI** app in `~/Applications`.
 
+Prefer not to use Terminal directly? Download
+[`packaging/Install RTSP-NDI.command`](packaging/Install%20RTSP-NDI.command)
+and double-click it in Finder — it just runs the same installer. macOS will
+warn it's from an unidentified developer the first time since it isn't
+code-signed; right-click it and choose **Open** to get past that once (and
+if it won't run at all, `chmod +x` it — permissions can be lost when
+downloading a single file rather than cloning the repo).
+
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gotfox/rtsp-ndi/main/uninstall.sh | bash
+```
+
+Removes the launchd service, the pipx install, and the RTSP-NDI.app bundle.
+Homebrew/pyenv/FFmpeg/Tcl-Tk are left alone since other things may depend on
+them, and your camera config/logs are kept by default — add
+`RTSP_NDI_PURGE=1` before `bash` to remove those too. Or double-click
+[`packaging/Uninstall RTSP-NDI.command`](packaging/Uninstall%20RTSP-NDI.command).
+
 ### Other platforms
 
 ```bash
@@ -48,6 +68,12 @@ From the GUI you can:
   automatically so the new name shows up on the network.
 - **Start / Stop / Restart** each feed individually, or **Start All / Stop
   All**.
+- **Details…** — see the full status/error message for the selected feed
+  (the table's Detail column can get cut off; this shows the whole thing).
+- **View Log…** — open the log file at `~/Library/Logs/rtsp-ndi/rtsp-ndi.log`,
+  which records every status change (and full tracebacks for unexpected
+  errors) — useful since a GUI app launched from Finder has no terminal for
+  its output to go to otherwise.
 
 Feeds added or edited in the GUI are saved to the same config the CLI and
 background service use, so `rtsp-ndi list` will show them too.
@@ -73,7 +99,12 @@ rtsp-ndi stop
 rtsp-ndi restart
 rtsp-ndi status
 rtsp-ndi gui         # launch the desktop GUI
+rtsp-ndi --version
 ```
+
+The version is also shown in the GUI's title bar and status bar, and in
+`rtsp-ndi status` — handy for confirming a reinstall from `main` actually
+picked up new code, since it isn't published to PyPI as separate releases.
 
 ### One-off bridge (no service, no config file)
 
