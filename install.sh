@@ -83,6 +83,7 @@ find_working_python() {
 }
 
 PYTHON=$(find_working_python || true)
+PYENV_PYTHON="$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12"
 
 if [[ -z "$PYTHON" ]]; then
     warn "Homebrew Python 3.12 is incompatible with this macOS version. Installing via pyenv..."
@@ -102,7 +103,25 @@ if [[ -z "$PYTHON" ]]; then
         info "Python $PYTHON_VERSION already installed via pyenv."
     fi
 
-    PYTHON="$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3.12"
+    PYTHON="$PYENV_PYTHON"
+elif [[ "$PYTHON" == "$PYENV_PYTHON" ]] && ! "$PYTHON" -c "import tkinter" &>/dev/null; then
+    # A pyenv build already exists (e.g. from before Tcl/Tk was installed, or
+    # an older run of this script) but wasn't compiled with tkinter support.
+    # Rebuild it rather than silently keeping a GUI-less Python around.
+    warn "Existing pyenv Python $PYTHON_VERSION lacks tkinter support. Rebuilding with Tcl/Tk..."
+
+    if ! command -v pyenv &>/dev/null; then
+        info "Installing pyenv..."
+        brew install pyenv
+    fi
+
+    if [[ -n "$TCLTK_PREFIX" ]]; then
+        export PYTHON_CONFIGURE_OPTS="--with-tcltk-includes='-I$TCLTK_PREFIX/include' --with-tcltk-libs='-L$TCLTK_PREFIX/lib -ltcl8.6 -ltk8.6'"
+    fi
+    pyenv uninstall -f "$PYTHON_VERSION"
+    pyenv install "$PYTHON_VERSION"
+
+    PYTHON="$PYENV_PYTHON"
 elif [[ "$PYTHON" == "$(brew --prefix python@3.12 2>/dev/null)/bin/python3.12" ]]; then
     # Homebrew's Python ships tkinter as a separate formula.
     if ! "$PYTHON" -c "import tkinter" &>/dev/null; then
@@ -128,12 +147,16 @@ fi
 # ── install or upgrade rtsp-ndi ───────────────────────────────────────────────
 # --force reinstalls even if pipx thinks it's already installed, which for a
 # git source also means re-fetching the branch's latest commit each run.
+# pipx can exit nonzero here for reasons unrelated to the install actually
+# working (e.g. its shared-library refresh step, or a shadowed-executable
+# note), so don't let `set -e` treat that as fatal — the executable checks
+# right after this are what actually verify success.
 if "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
     info "Reinstalling $PACKAGE from $SOURCE..."
-    "$PYTHON" -m pipx install --force "$SOURCE"
+    "$PYTHON" -m pipx install --force "$SOURCE" || true
 else
     info "Installing $PACKAGE from $SOURCE..."
-    "$PYTHON" -m pipx install "$SOURCE"
+    "$PYTHON" -m pipx install "$SOURCE" || true
 fi
 
 # ── ensure ~/.local/bin is on PATH ────────────────────────────────────────────
@@ -185,13 +208,14 @@ build_icns() {
 }
 
 # The icon ships inside the installed package (src/rtsp_ndi/assets/icon.png).
-# Don't guess pipx's venv directory layout — it differs by platform and has
-# changed across pipx versions (e.g. ~/.local/pipx vs the newer platform data
-# dir, which on macOS is ~/Library/Application Support/pipx). Instead, read
-# the venv's python straight off the shebang of the script pipx just
-# installed — pip/setuptools always points console-script shebangs at their
-# own venv's interpreter, regardless of where that venv lives.
-PIPX_VENV_PYTHON="$(head -n1 "$LOCAL_BIN/rtsp-ndi" 2>/dev/null | sed 's/^#!//')"
+# Don't guess pipx's venv directory layout, and don't read it off the
+# shebang of the script pipx just installed either: on macOS that venv
+# lives under "~/Library/Application Support/pipx/...", and a space in
+# the interpreter path makes pip/setuptools emit a "#!/bin/sh" polyglot
+# shim instead of a plain shebang, so the first line is just "/bin/sh",
+# not the real interpreter. Ask pipx itself where it keeps its venvs.
+PIPX_VENVS_DIR="$("$PYTHON" -m pipx environment --value PIPX_LOCAL_VENVS 2>/dev/null)"
+PIPX_VENV_PYTHON="$PIPX_VENVS_DIR/$PACKAGE/bin/python3.12"
 ICON_SOURCE=""
 if [[ -x "$PIPX_VENV_PYTHON" ]]; then
     ICON_SOURCE="$("$PIPX_VENV_PYTHON" -c "
