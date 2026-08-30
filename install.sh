@@ -147,12 +147,16 @@ fi
 # ── install or upgrade rtsp-ndi ───────────────────────────────────────────────
 # --force reinstalls even if pipx thinks it's already installed, which for a
 # git source also means re-fetching the branch's latest commit each run.
+# pipx can exit nonzero here for reasons unrelated to the install actually
+# working (e.g. its shared-library refresh step, or a shadowed-executable
+# note), so don't let `set -e` treat that as fatal — the executable checks
+# right after this are what actually verify success.
 if "$PIPX" list 2>/dev/null | grep -q "$PACKAGE"; then
     info "Reinstalling $PACKAGE from $SOURCE..."
-    "$PYTHON" -m pipx install --force "$SOURCE"
+    "$PYTHON" -m pipx install --force "$SOURCE" || true
 else
     info "Installing $PACKAGE from $SOURCE..."
-    "$PYTHON" -m pipx install "$SOURCE"
+    "$PYTHON" -m pipx install "$SOURCE" || true
 fi
 
 # ── ensure ~/.local/bin is on PATH ────────────────────────────────────────────
